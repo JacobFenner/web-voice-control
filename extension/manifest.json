@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Voice Navigator",
+  "version": "1.0",
+  "description": "Navigate web pages using voice commands",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "microphone",
+    "tabs",
+    "windows"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content/*", "popup/*", "recognition.html", "ai-service.js", "command-patterns.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://api.together.xyz;"
+  }
+}
