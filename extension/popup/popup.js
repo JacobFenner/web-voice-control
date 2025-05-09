@@ -21,7 +21,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 examples: {
                     "new tab": "Opens a new tab",
                     "close tab": "Closes current tab",
-                    "switch to tab 2": "Switches to specific tab"
+                    "switch to tab 2": "Switches to specific tab",
+                    "go back": "Navigate to the previous page",
+                    "go forward": "Navigate to the next page",
                 }
             },
             scrolling: {

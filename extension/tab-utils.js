@@ -4,7 +4,8 @@ function findTargetTab(tabs, target) {
         return tabs[index];
     }
 
+    console.log(tabs)
     return tabs.find(tab =>
-        tab.title.toLowerCase().includes(target.toLowerCase())
+        tab.title.toLowerCase().includes(target?.toLowerCase())
     );
 }

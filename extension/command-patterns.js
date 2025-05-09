@@ -10,23 +10,34 @@ const commandPatterns = {
         ],
         closeTab: [
             /^(close|exit)\s+(this\s+)?tab/i
+        ],
+        goBack: [
+            /^(go|navigate)\s+back$/i,
+            /^back$/i,
+            /^return$/i,
+            /^previous(\s+page)?$/i
+        ],
+        goForward: [
+            /^(go|navigate)\s+forward$/i,
+            /^forward$/i,
+            /^next(\s+page)?$/i
         ]
     },
 
     // Scrolling patterns
     scrolling: {
-        up: [/^scroll\s+(up|back|backward)/i],
-        down: [/^scroll\s+(down|forward)/i],
-        top: [/^(scroll\s+to\s+)?(the\s+)?top/i],
-        bottom: [/^(scroll\s+to\s+)?(the\s+)?bottom/i]
+        up: [/^scroll\s+(up|back|backward)$/i],
+        down: [/^scroll\s+(down|forward)$/i],
+        top: [/^(scroll\s+to\s+)?(the\s+)?top$/i],
+        bottom: [/^(scroll\s+to\s+)?(the\s+)?bottom$/i]
     },
 
     // Click patterns
     clicking: {
         simpleClick: [/^(click|tap|press)$/i],
         elementClick: [
-            /^(click|tap|press)\s+(on\s+)?(the\s+)?(.*?)\s+(button|link|element)/i,
-            /^(click|tap|press)\s+(the\s+)?(.*)/i
+            /^(click|tap|press)\s+(on\s+)?(the\s+)?(.*?)\s+(button|link|element)$/i,
+            /^(click|tap|press)\s+(the\s+)?(.*)$/i
         ]
     },
 
