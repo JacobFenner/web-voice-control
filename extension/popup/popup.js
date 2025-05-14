@@ -65,7 +65,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     "close tab": "Closes current tab",
                     "switch to tab 2": "Switches to specific tab",
                     "go back": "Navigate to the previous page",
-                    "go forward": "Navigate to the next page"
+                    "go forward": "Navigate to the next page",
+                    "open youtube.com": "Open a website in the current tab"
                 }
             },
             scrolling: {

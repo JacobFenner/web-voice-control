@@ -238,10 +238,16 @@ async function handleVoiceCommand(command, confidence, sendResponse) {
     try {
         // Check if the command matches any patterns
         const result = processCommand(command);
+        log('background', 'Command processing result:', result);
+
+        // For "navigateToUrl" action, handle it with AI
+        if (result.matched && result.action === 'navigateToUrl') {
+            log('background', 'URL navigation command detected, passing to AI');
+            await processWithAI(command, result);
+            return;
+        }
 
         if (result.matched) {
-            log('background', 'Command matched pattern:', result);
-
             // If the command pattern explicitly says to use AI
             if (result.useAI) {
                 log('background', 'Command matched pattern but needs AI for specific execution');
@@ -570,6 +576,49 @@ async function executeAIAction(tabId, aiResult) {
                     interactionType: 'input',
                     value: aiResult.value || ''
                 });
+                break;
+
+            case 'navigate_to_url':
+                log('background', 'Navigating to URL:', aiResult.target);
+
+                try {
+                    // Ensure URL has a protocol
+                    let url;
+                    let inNewTab = false;
+
+                    // Format 1: URL in target field
+                    if (aiResult.target) {
+                        url = aiResult.target;
+                    }
+                    // Format 2: URL in details.url field
+                    else if (aiResult.details && aiResult.details.url) {
+                        url = aiResult.details.url;
+                        inNewTab = aiResult.details.newTab === true;
+                    }
+                    else {
+                        throw new Error('No URL provided for navigation');
+                    }
+
+                    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                        url = 'https://' + url;
+                    }
+
+                    log('background', `Navigating to ${url} ${inNewTab ? 'in new tab' : 'in current tab'}`);
+
+                    if (inNewTab) {
+                        // Open URL in new tab
+                        const newTab = await chrome.tabs.create({ url: url });
+                        return { success: true, action: 'navigated', url, tabId: newTab.id };
+                    } else {
+                        // Navigate current tab
+                        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                        await chrome.tabs.update(currentTab.id, { url: url });
+                        return { success: true, action: 'navigated', url };
+                    }
+                } catch (error) {
+                    logError('background', 'Error navigating to URL:', error);
+                    return { success: false, error: error.message };
+                }
                 break;
 
             case 'scroll':

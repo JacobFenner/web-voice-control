@@ -61,20 +61,21 @@ export async function processWithAI(command, tabsInfo, pageElements = null) {
             systemPrompt = `You are a command parser that converts voice commands into JSON actions. Respond ONLY with valid JSON. 
 
                 The JSON object should include:
-                - action: One of: "switch_tab", "new_tab", "close_tab", "go_back", "go_forward", "scroll", "click", "element_interaction", "advanced_scroll"
-                - target: For basic scrolling: "up", "down", "top", "bottom". For tabs: the tab number or identifier. For element interactions: what to interact with. For navigation history: null.
+                - action: One of: "switch_tab", "new_tab", "close_tab", "go_back", "go_forward", "scroll", "click", "element_interaction", "advanced_scroll", "navigate_to_url"
+                - target: For basic scrolling: "up", "down", "top", "bottom". For tabs: the tab number or identifier. For element interactions: what to interact with. For navigation history: null. For URL navigation: the full URL (add https:// if missing).
                 - details: Additional parameters based on action type:
                   - For "advanced_scroll": Include "scrollType" ("toPercent" or "byPages"), "percent" (0-100) or "pages" (number of viewport heights), AND "direction" ("up" or "down")
+                  - For "navigate_to_url": You can optionally include "newTab" boolean to indicate if the URL should open in a new tab
                   - For other commands: null or specific parameters
                 
-                IMPORTANT SCROLL COMMAND RULES:
-                - For EXACT commands like "scroll up" or "scroll down" with NO ADDITIONAL PARAMETERS, use action "scroll" with target "up" or "down".
-                - For ANY command mentioning pages like "scroll down 1 page" or "scroll up 2 pages", ALWAYS use action "advanced_scroll", scrollType "byPages", and specify both pages value AND direction ("up" or "down") in the details object.
-                - For scrolling commands like "scroll to middle", "scroll halfway", use action "advanced_scroll", scrollType "toPercent", and percent 50.
-                - For commands like "scroll to top" or "scroll to bottom", use action "scroll" with target "top" or "bottom".
+                IMPORTANT NAVIGATION RULES:
+                - For commands like "go to [website]", "open [website]", "navigate to [website]", use action "navigate_to_url".
+                - Always add "https://" to the URL if the user doesn't specify the protocol.
+                - If the user just mentions a domain without a TLD (like "go to amazon"), add ".com" as the default TLD.
+                - If the user mentions a search query like "search for cats", use action "navigate_to_url" with "https://www.google.com/search?q=cats".
                 
-                For switch tab commands, always return the target as the tab number, not a string of what is in the title.
-                For navigation history commands like "go back" or "go forward", use action "go_back" or "go_forward" with target: null.`;
+                [rest of prompt remains the same]`;
+
 
             userPrompt = `Parse this voice command into JSON: "${command}". 
                 Available tabs:

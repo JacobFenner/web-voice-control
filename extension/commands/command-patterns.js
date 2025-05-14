@@ -5,7 +5,9 @@ export const commandPatterns = {
             { regex: /\b(close|exit)\s+tab\b/i, action: 'closeTab' },
             { regex: /\bswitch\s+to\s+tab\s+(\d+|first|second|third|fourth|fifth|last)\b/i, action: 'switchTab' },
             { regex: /\bgo\s+back\b/i, action: 'goBack' },
-            { regex: /\bgo\s+forward\b/i, action: 'goForward' }
+            { regex: /\bgo\s+forward\b/i, action: 'goForward' },
+            { regex: /\b(go\s+to|open|navigate\s+to)\s+([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/i, action: 'navigateToUrl' },
+            { regex: /\bsearch\s+(for\s+)?(.+)$/i, action: 'search' }
         ]
     },
 
