@@ -1,6 +1,6 @@
 const TOGETHER_API_KEY = 'tgp_v1_RFc5YLeJaQ2tSm5oaJGRhOX_-OUGO-KZDZQiJCHqZOs'; // Replace with your actual API key
 
-async function processWithAI(command, tabsInfo, pageElements = null) {
+export async function processWithAI(command, tabsInfo, pageElements = null) {
     console.log("Processing command with AI:", command);
 
     try {
@@ -30,47 +30,51 @@ async function processWithAI(command, tabsInfo, pageElements = null) {
                 placeholder: element.placeholder,
                 role: element.role,
                 type: element.type,
-                isInViewport: element.isInViewport
+                isInViewport: element.isInViewport,
+                hasAssignedId: element.id && element.id.startsWith('vc-target-')
             }));
 
             systemPrompt = `You are an AI assistant that helps users interact with web elements. You analyze page elements and find the best match for user commands.
-            
+    
                 Respond with a JSON object containing:
                 - action: The type of interaction ("click", "input", "select", "scroll")
-                - target: The specific selector or path to interact with
+                - target: The specific selector to interact with. IMPORTANT: If an element has an id, ALWAYS use the '#id' selector format as it's most reliable.
                 - value: Any value to be input (for text fields)
                 - confidence: A number between 0-1 indicating your confidence
                 - reasoning: A brief explanation of why this element was chosen`;
 
             userPrompt = `User command: "${command}"
-            
+    
                 Page title: ${pageElements.pageContext.title}
                 URL: ${pageElements.pageContext.url}
                 
                 Available interactive elements:
                 ${JSON.stringify(filteredElements, null, 2)}
                 
-                Based on the command and available elements, identify which element to interact with and how.`;
+                Based on the command and available elements, identify which element to interact with and how.
+                ALWAYS prefer using id selectors (format: '#element-id') when available as they are most reliable.`;
         }
         // Otherwise, process as a navigation/system command
         else {
             console.log("Processing as navigation/system command");
 
             systemPrompt = `You are a command parser that converts voice commands into JSON actions. Respond ONLY with valid JSON. 
-    
+
                 The JSON object should include:
                 - action: One of: "switch_tab", "new_tab", "close_tab", "go_back", "go_forward", "scroll", "click", "element_interaction", "advanced_scroll"
                 - target: For basic scrolling: "up", "down", "top", "bottom". For tabs: the tab number or identifier. For element interactions: what to interact with. For navigation history: null.
                 - details: Additional parameters based on action type:
-                  - For "advanced_scroll": Include "scrollType" ("toPercent" or "byPages"), "percent" (0-100) or "pages" (number of viewport heights)
+                  - For "advanced_scroll": Include "scrollType" ("toPercent" or "byPages"), "percent" (0-100) or "pages" (number of viewport heights), AND "direction" ("up" or "down")
                   - For other commands: null or specific parameters
                 
-                For scrolling commands like "scroll to middle", "scroll halfway", use action "advanced_scroll", scrollType "toPercent", and percent 50.
+                IMPORTANT SCROLL COMMAND RULES:
+                - For EXACT commands like "scroll up" or "scroll down" with NO ADDITIONAL PARAMETERS, use action "scroll" with target "up" or "down".
+                - For ANY command mentioning pages like "scroll down 1 page" or "scroll up 2 pages", ALWAYS use action "advanced_scroll", scrollType "byPages", and specify both pages value AND direction ("up" or "down") in the details object.
+                - For scrolling commands like "scroll to middle", "scroll halfway", use action "advanced_scroll", scrollType "toPercent", and percent 50.
+                - For commands like "scroll to top" or "scroll to bottom", use action "scroll" with target "top" or "bottom".
+                
                 For switch tab commands, always return the target as the tab number, not a string of what is in the title.
-                For commands like "scroll down one page", use action "advanced_scroll", scrollType "byPages", and pages 1.
                 For navigation history commands like "go back" or "go forward", use action "go_back" or "go_forward" with target: null.`;
-
-
 
             userPrompt = `Parse this voice command into JSON: "${command}". 
                 Available tabs:

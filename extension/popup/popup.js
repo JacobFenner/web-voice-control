@@ -1,4 +1,5 @@
-const port = chrome.runtime.connect({name: "popup"});
+// popup.js - Remove importScripts and use standard module imports
+// This should be a module because popup.html has <script type="module">
 
 document.addEventListener('DOMContentLoaded', function() {
     const startBtn = document.getElementById('startBtn');
@@ -6,14 +7,55 @@ document.addEventListener('DOMContentLoaded', function() {
     const status = document.getElementById('status');
     const commandList = document.getElementById('commandList');
 
-    // Get command patterns and display them
-    import('../command-patterns.js').then(module => {
-        const { commandPatterns } = module;
-        displayCommands(commandPatterns);
-    }).catch(error => {
-        console.error('Error loading command patterns:', error);
-    });
+    // Initialize UI based on storage
+    initializeUI();
 
+    // Load and display command examples
+    loadCommandExamples();
+
+    // Set up event listeners
+    setupEventListeners();
+
+    /**
+     * Initialize the UI based on stored state
+     */
+    function initializeUI() {
+        chrome.storage.local.get(['isActive'], function(result) {
+            const isActive = result.isActive === true;
+            updateStatusDisplay(isActive);
+        });
+    }
+
+    /**
+     * Updates the status display
+     */
+    function updateStatusDisplay(isActive) {
+        status.textContent = isActive ? 'Active' : 'Inactive';
+        status.className = 'status ' + (isActive ? 'active' : 'inactive');
+
+        // Update button states
+        startBtn.disabled = isActive;
+        stopBtn.disabled = !isActive;
+    }
+
+    /**
+     * Load command examples from command patterns
+     */
+    function loadCommandExamples() {
+        // Use dynamic import since we're in a module
+        import('../commands/command-patterns.js')
+            .then(module => {
+                displayCommands(module.commandPatterns);
+            })
+            .catch(error => {
+                console.error('Error loading command patterns:', error);
+                commandList.innerHTML = '<p class="error">Failed to load commands</p>';
+            });
+    }
+
+    /**
+     * Display formatted commands in the UI
+     */
     function displayCommands(patterns) {
         const commandsByCategory = {
             navigation: {
@@ -23,7 +65,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     "close tab": "Closes current tab",
                     "switch to tab 2": "Switches to specific tab",
                     "go back": "Navigate to the previous page",
-                    "go forward": "Navigate to the next page",
+                    "go forward": "Navigate to the next page"
                 }
             },
             scrolling: {
@@ -38,7 +80,8 @@ document.addEventListener('DOMContentLoaded', function() {
             clicking: {
                 title: "Clicking",
                 examples: {
-                    "click": "Clicks at current eye position"
+                    "click": "Clicks at current mouse position",
+                    "click login button": "Finds and clicks the login button"
                 }
             },
             system: {
@@ -50,40 +93,70 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
 
-        const html = Object.entries(commandsByCategory)
+        commandList.innerHTML = Object.entries(commandsByCategory)
             .map(([category, info]) => `
                 <div class="command-category">${info.title}</div>
                 <ul class="command-list">
                     ${Object.entries(info.examples)
                 .map(([command, description]) =>
-                    `<li>"${command}" - ${description}</li>`)
+                    `<li><span class="command">"${command}"</span> - ${description}</li>`)
                 .join('')}
                 </ul>
             `).join('');
-
-        commandList.innerHTML = html;
     }
 
-    // Existing event listeners
-    chrome.storage.local.get(['isActive'], function(result) {
-        status.textContent = result.isActive ? 'Active' : 'Inactive';
-        status.className = 'status ' + (result.isActive ? 'active' : 'inactive');
-    });
+    /**
+     * Set up event listeners for buttons
+     */
+    function setupEventListeners() {
+        startBtn.addEventListener('click', function() {
+            console.log('Starting voice recognition');
 
-    startBtn.addEventListener('click', function() {
-        console.log('Starting...');
-        chrome.runtime.sendMessage({type: "action", action: "start"}, function(response) {
-            console.log('Response received:', response);
+            chrome.runtime.sendMessage({type: "action", action: "start"}, function(response) {
+                console.log('Start response received:', response);
+
+                // Check if we got a response at all
+                if (chrome.runtime.lastError) {
+                    console.error('Error sending message:', chrome.runtime.lastError);
+                    status.textContent = 'Error: Service worker inactive';
+                    status.className = 'status error';
+                    return;
+                }
+
+                if (response && response.success) {
+                    updateStatusDisplay(true);
+                    chrome.storage.local.set({isActive: true});
+                } else {
+                    // Handle error
+                    const errorMessage = response ? response.error : 'Unknown error';
+                    console.error('Error starting recognition:', errorMessage);
+                    status.textContent = 'Error: ' + errorMessage;
+                    status.className = 'status error';
+                }
+            });
         });
-        status.textContent = 'Active';
-        status.className = 'status active';
-        chrome.storage.local.set({isActive: true});
-    });
 
-    stopBtn.addEventListener('click', function() {
-        chrome.runtime.sendMessage({type: "action", action: "stop"});
-        status.textContent = 'Inactive';
-        status.className = 'status inactive';
-        chrome.storage.local.set({isActive: false});
-    });
+        stopBtn.addEventListener('click', function() {
+            console.log('Stopping voice recognition');
+
+            chrome.runtime.sendMessage({type: "action", action: "stop"}, function(response) {
+                console.log('Stop response received:', response);
+
+                if (chrome.runtime.lastError) {
+                    console.error('Error sending message:', chrome.runtime.lastError);
+                    return;
+                }
+
+                updateStatusDisplay(false);
+                chrome.storage.local.set({isActive: false});
+            });
+        });
+
+        // Listen for status updates from background
+        chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+            if (request.type === 'statusUpdate') {
+                updateStatusDisplay(request.isActive);
+            }
+        });
+    }
 });

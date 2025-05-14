@@ -1,120 +1,256 @@
-let mousePosition = { x: 0, y: 0 };
+// Track mouse position
+let mousePosition = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+const EXTENSION_ID_PREFIX = 'vc-target-';
+let elementIdCounter = 0;
+let elementsWithAssignedIds = new Set();
 
 // Update mouse position when the mouse moves
-document.addEventListener('mousemove', function(e) {
+document.addEventListener('mousemove', (e) => {
     mousePosition.x = e.clientX;
     mousePosition.y = e.clientY;
 });
 
 // Initialize with center of viewport
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', () => {
     mousePosition = {
         x: window.innerWidth / 2,
         y: window.innerHeight / 2
     };
+    console.log('Content script loaded, mouse position initialized');
+
+    setTimeout(assignIdsToInteractiveElements, 500);
 });
 
-function processCommand(command, details) {
-    console.log(command, details);
-    switch (command) {
-        case 'click':
-            handleClick();
-            break;
-        case 'scroll_up':
-            smartScroll(-300);
-            break;
-        case 'scroll_down':
-            smartScroll(300);
-            break;
-        case 'scroll_top':
-            smartScrollTo(0);
-            break;
-        case 'scroll_bottom':
-            smartScrollToBottom();
-            break;
-        case 'scroll_to_percent':
-            if (details && details.percent !== undefined) {
-                smartScrollToPercent(details.percent);
-            }
-            break;
-        case 'scroll_by_pages':
-            if (details && details.pages !== undefined) {
-                smartScrollByPages(details.pages);
-            }
-            break;
-        case 'custom_scroll':
-            if (details && details.amount) {
-                smartScroll(details.amount);
-            }
-            break;
-        // Add more commands as needed
-    }
-}
+window.addEventListener('load', () => {
+    assignIdsToInteractiveElements();
+});
 
-function handleClick() {
-}
+const observer = new MutationObserver((mutations) => {
+    // Check if significant changes were made to the DOM
+    let shouldReassign = false;
 
-chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-    console.log("Received message from background script:", request);
-    if (request.action === "ping") {
-        console.log("Ping received, sending response");
-        sendResponse({ status: "ok", from: "content_script" });
-    } else if (request.action === "processCommand") {
-        processCommand(request.command, request.details);
-    } else if (request.action === "scroll") {
-        processCommand(request.direction === "up" ? "scroll_up" : "scroll_down");
-    } else if (request.action === "getPageElements") {
-        const elements = extractInteractiveElements();
-        sendResponse(elements);
-    } else if (request.action === "interactWithElement") {
-        const result = interactWithElement(
-            request.selector,
-            request.interactionType || 'click',
-            request.value
-        );
-        sendResponse(result);
-    } else if (request.action === "advancedScroll") {
-        // Handle advanced scroll commands
-        switch (request.scrollType)  {
-            case "toPercent":
-                smartScrollToPercent(request.percent);
-                break;
-            case "byPages":
-                smartScrollByPages(request.pages);
-                break;
-            case "getInfo":
-                sendResponse(getScrollInfo());
-                return true;
+    for (const mutation of mutations) {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+            for (const node of mutation.addedNodes) {
+                // Only reassign if actual elements were added (not text nodes)
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    shouldReassign = true;
+                    break;
+                }
+            }
         }
-    } else if (request.type === "performClick") {
-        console.log("Received performClick request:", request);
 
-        // Extract the element description from params
-        const elementDescription = request.params.join(' ');
-        console.log("Looking for element:", elementDescription);
-
-        // Use your interactWithElement function to find and click the element
-        const result = interactWithElement(elementDescription, 'click');
-        console.log("Click result:", result);
-
-        // Send back the result
-        sendResponse(result);
+        if (shouldReassign) break;
     }
 
-    return true;
+    if (shouldReassign) {
+        assignIdsToInteractiveElements();
+    }
 });
 
-function smartScroll(amount) {
-    const scrollableElement = findScrollableElementAtMousePosition();
+observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: false,
+    characterData: false
+});
+
+// Log function for content script (can't import in content scripts by default)
+function log(component, message, data = null) {
+    const prefix = `[${component}]`;
+
+    if (data) {
+        console.log(prefix, message, data);
+    } else {
+        console.log(prefix, message);
+    }
+
+    // Try to send to background script
+    try {
+        chrome.runtime.sendMessage({
+            type: 'log',
+            component,
+            message,
+            data
+        }).catch(() => {});
+    } catch (e) {
+        // Ignore errors from sending messages
+    }
+}
+
+function assignIdsToInteractiveElements() {
+    console.log("Assigning IDs to interactive elements");
+
+    // Common interactive elements selectors
+    const interactiveSelectors = [
+        'button',
+        'a',
+        'input',
+        'select',
+        'textarea',
+        '[role="button"]',
+        '[role="link"]',
+        '[role="tab"]',
+        '[role="menuitem"]',
+        '[role="checkbox"]',
+        '[role="radio"]',
+        '[role="switch"]',
+        '[role="combobox"]',
+        '[role="option"]',
+        '[aria-haspopup="true"]',
+        '[contenteditable="true"]',
+        // Add more as needed
+    ];
+
+    // Query all interactive elements
+    const elements = document.querySelectorAll(interactiveSelectors.join(', '));
+    console.log(`Found ${elements.length} potential interactive elements`);
+
+    let assignedCount = 0;
+
+    // Assign IDs to elements that don't have one
+    elements.forEach(element => {
+        // Skip elements that already have our assigned ID or are hidden/invisible
+        if (elementsWithAssignedIds.has(element) || !isElementVisible(element)) {
+            return;
+        }
+
+        // If element doesn't have an ID, assign one
+        if (!element.id) {
+            // Generate an ID based on text content or tag type
+            let idBase = '';
+
+            // Try to use text content first
+            const textContent = element.textContent?.trim();
+            if (textContent && textContent.length > 0 && textContent.length < 20) {
+                // Create a valid ID from text content (alphanumeric and hyphens only)
+                idBase = textContent
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]/g, '-')
+                    .replace(/-+/g, '-')
+                    .replace(/^-|-$/g, '');
+            }
+
+            // If no usable text content, use tag name
+            if (!idBase) {
+                idBase = element.tagName.toLowerCase();
+            }
+
+            // Assign unique ID by appending counter
+            const newId = `${EXTENSION_ID_PREFIX}${idBase}-${elementIdCounter++}`;
+            element.id = newId;
+            elementsWithAssignedIds.add(element);
+            assignedCount++;
+        }
+        // If element already has an ID, just track it
+        else {
+            elementsWithAssignedIds.add(element);
+        }
+    });
+
+    console.log(`Assigned ${assignedCount} new IDs to elements`);
+    return assignedCount;
+}
+
+// Process incoming messages from the background script
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log('Content received message:', request);
+
+    try {
+        switch (request.action) {
+            case 'ping':
+                sendResponse({ status: 'ok', from: 'content_script' });
+                break;
+
+            case 'getPageElements':
+                const elements = extractInteractiveElements();
+                sendResponse(elements);
+                break;
+
+            case 'interactWithElement':
+                if (request.selector === 'currentPosition') {
+                    // Click at current mouse position
+                    const element = document.elementFromPoint(mousePosition.x, mousePosition.y);
+                    if (element) {
+                        clickElement(element)
+                            .then(result => sendResponse(result))
+                            .catch(error => sendResponse({ success: false, error: error.message }));
+                    } else {
+                        sendResponse({ success: false, error: 'No element at position' });
+                    }
+                } else {
+                    // Convert findElement to return a Promise
+                    findElementPromise(request.selector)
+                        .then(element => {
+                            if (!element) {
+                                sendResponse({ success: false, error: 'Element not found' });
+                                return null;
+                            }
+
+                            if (request.interactionType === 'click') {
+                                return clickElement(element);
+                            } else if (request.interactionType === 'input') {
+                                return inputText(element, request.value);
+                            } else if (request.interactionType === 'select') {
+                                return selectOption(element, request.value);
+                            } else {
+                                return { success: false, error: 'Unknown interaction type' };
+                            }
+                        })
+                        .then(result => {
+                            if (result) sendResponse(result);
+                        })
+                        .catch(error => {
+                            console.error("Error in element interaction:", error);
+                            sendResponse({ success: false, error: error.message });
+                        });
+                }
+                return true; // Keep the channel open for async response
+
+            case 'scroll':
+                handleScroll(request.direction === 'up' ? -300 : 300);
+                sendResponse({ success: true });
+                break;
+
+            case 'advancedScroll':
+                switch (request.scrollType) {
+                    case 'toPercent':
+                        scrollToPercent(request.percent);
+                        break;
+
+                    case 'byPages':
+                        scrollByPages(request.pages, request.direction || 1);
+                        break;
+
+                    case 'getInfo':
+                        sendResponse(getScrollInfo());
+                        return true;
+                }
+                sendResponse({ success: true });
+                break;
+
+            default:
+                console.log('Unknown action:', request.action);
+                sendResponse({ success: false, error: 'Unknown action' });
+        }
+    } catch (error) {
+        console.error('Error processing message:', error);
+        sendResponse({ success: false, error: error.message });
+    }
+
+    return true; // Keep the message channel open
+});
+
+//================ SCROLL HANDLING FUNCTIONS ================//
+function handleScroll(amount) {
+    const scrollableElement = findScrollableElement();
 
     if (scrollableElement) {
-        // If found a scrollable container, scroll it
         scrollableElement.scrollBy({
             top: amount,
             behavior: 'smooth'
         });
     } else {
-        // Fall back to window scroll
         window.scrollBy({
             top: amount,
             behavior: 'smooth'
@@ -122,40 +258,8 @@ function smartScroll(amount) {
     }
 }
 
-function smartScrollTo(position) {
-    const scrollableElement = findScrollableElementAtMousePosition();
-
-    if (scrollableElement) {
-        scrollableElement.scrollTo({
-            top: position,
-            behavior: 'smooth'
-        });
-    } else {
-        window.scrollTo({
-            top: position,
-            behavior: 'smooth'
-        });
-    }
-}
-
-function smartScrollToBottom() {
-    const scrollableElement = findScrollableElementAtMousePosition();
-
-    if (scrollableElement) {
-        scrollableElement.scrollTo({
-            top: scrollableElement.scrollHeight,
-            behavior: 'smooth'
-        });
-    } else {
-        window.scrollTo({
-            top: document.body.scrollHeight,
-            behavior: 'smooth'
-        });
-    }
-}
-
-function smartScrollToPercent(percent) {
-    const scrollableElement = findScrollableElementAtMousePosition();
+function scrollToPercent(percent) {
+    const scrollableElement = findScrollableElement();
 
     if (scrollableElement) {
         const targetPosition = scrollableElement.scrollHeight * (percent / 100);
@@ -172,22 +276,20 @@ function smartScrollToPercent(percent) {
     }
 }
 
-// Scroll by a number of "pages" (viewport heights)
-function smartScrollByPages(pages) {
-    const scrollableElement = findScrollableElementAtMousePosition();
+function scrollByPages(pages, direction = 1) {
+    const scrollableElement = findScrollableElement();
     const viewportHeight = window.innerHeight;
+    const scrollAmount = pages * viewportHeight * direction;
 
-    const scrollAmount = pages * viewportHeight;
+    console.log(`Scrolling by ${pages} page(s), direction: ${direction > 0 ? 'down' : 'up'}`);
 
     if (scrollableElement) {
-        // Current position plus the desired scroll amount
         const currentPos = scrollableElement.scrollTop;
         scrollableElement.scrollTo({
             top: currentPos + scrollAmount,
             behavior: 'smooth'
         });
     } else {
-        // Current position plus the desired scroll amount
         const currentPos = window.pageYOffset || document.documentElement.scrollTop;
         window.scrollTo({
             top: currentPos + scrollAmount,
@@ -197,7 +299,7 @@ function smartScrollByPages(pages) {
 }
 
 function getScrollInfo() {
-    const scrollableElement = findScrollableElementAtMousePosition();
+    const scrollableElement = findScrollableElement();
 
     if (scrollableElement) {
         return {
@@ -227,7 +329,7 @@ function getScrollInfo() {
     }
 }
 
-function findScrollableElementAtMousePosition() {
+function findScrollableElement() {
     // Get element at mouse position
     const element = document.elementFromPoint(mousePosition.x, mousePosition.y);
     if (!element) return null;
@@ -262,60 +364,472 @@ function isScrollable(element) {
     return hasScrollableContent && hasScrollableCSS;
 }
 
-function extractInteractiveElements() {
-    console.log("Extracting interactive elements from page");
+// Wrap findElement in a Promise
+function findElementPromise(selector) {
+    return new Promise((resolve) => {
+        const element = findElement(selector);
+        resolve(element);
+    });
+}
 
+//================ SCROLL HANDLING FUNCTIONS ================//
+// [Your existing scroll functions]
+
+//================ ELEMENT INTERACTION FUNCTIONS ================//
+function findElement(selector) {
+    console.log("Finding element with selector:", selector);
+    let element = null;
+
+    if (selector.startsWith('#') && selector.substring(1).startsWith(EXTENSION_ID_PREFIX)) {
+        const id = selector.substring(1);
+        element = document.getElementById(id);
+        if (element) {
+            console.log(`Found element directly by ID: ${id}`);
+            return element;
+        }
+    }
+
+    let textToFind = null;
+    if (selector.startsWith('[text=')) {
+        const match = selector.match(/\[text=['"]([^'"]+)['"]\]/);
+        if (match) {
+            textToFind = match[1];
+        }
+    }
+
+    // If we have text to find, try to find it among our IDs first
+    if (textToFind) {
+        // Look through all elements with our assigned IDs
+        for (const element of elementsWithAssignedIds) {
+            const elementText = element.textContent?.trim() || '';
+            if (elementText === textToFind || elementText.toLowerCase() === textToFind.toLowerCase()) {
+                console.log(`Found element by text match in assigned IDs: ${textToFind}`);
+                return element;
+            }
+        }
+    }
+
+    // Special case for XPath selectors
+    if (selector.startsWith('xpath=')) {
+        try {
+            // Extract the actual XPath expression
+            const xpathExpression = selector.substring(6); // Remove 'xpath=' prefix
+            console.log("Processing XPath:", xpathExpression);
+
+            // Evaluate the XPath expression
+            const result = document.evaluate(
+                xpathExpression,
+                document,
+                null,
+                XPathResult.FIRST_ORDERED_NODE_TYPE,
+                null
+            );
+
+            element = result.singleNodeValue;
+
+            // If we found an element, return it immediately
+            if (element) {
+                console.log("Found element using exact XPath");
+                return element;
+            }
+
+            // If the original XPath contained text() and failed, try a more flexible approach
+            if (xpathExpression.includes('text()=')) {
+                // Extract the text content we're looking for
+                const textMatch = xpathExpression.match(/text\(\)\s*=\s*['"]([^'"]+)['"]/);
+                if (textMatch) {
+                    const targetText = textMatch[1];
+                    console.log("Trying flexible XPath search for text:", targetText);
+
+                    // Get the element type (assuming format like //a[text()='Dashboard'])
+                    const elementTypeMatch = xpathExpression.match(/\/\/([a-zA-Z0-9]+)(\[|$)/);
+                    const elementType = elementTypeMatch ? elementTypeMatch[1] : '*';
+
+                    // Try a more flexible XPath that uses contains()
+                    const flexibleXPath = `//${elementType}[contains(text(), '${targetText}')]`;
+                    console.log("Flexible XPath:", flexibleXPath);
+
+                    const flexResult = document.evaluate(
+                        flexibleXPath,
+                        document,
+                        null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                        null
+                    );
+
+                    element = flexResult.singleNodeValue;
+
+                    if (element) {
+                        console.log("Found element using flexible XPath");
+                        return element;
+                    }
+
+                    // If XPath still fails, fall back to a simpler text search
+                    console.log("XPath failed, trying direct text search");
+                    element = findElementByText(targetText);
+
+                    if (element) {
+                        console.log("Found element using text search");
+                        return element;
+                    }
+                }
+            }
+        } catch (e) {
+            console.error("XPath evaluation error:", e);
+        }
+
+        // If we reach here, we couldn't find the element via XPath
+        // Try to extract text from XPath for fallback
+        const xpathText = extractTextFromXPath(selector);
+        if (xpathText) {
+            console.log("Trying to find by extracted text:", xpathText);
+            element = findElementByText(xpathText) || findElementByPartialText(xpathText);
+            return element;
+        }
+
+        return null; // Return null if all XPath approaches failed
+    }
+
+    // Handle :has-text() selector (Playwright style)
+    if (selector.includes(':has-text(')) {
+        const match = selector.match(/([a-z0-9]+):has-text\(['"]([^'"]+)['"]\)/i);
+        if (match) {
+            const [_, tagName, text] = match;
+            console.log(`Parsed :has-text selector: tag=${tagName}, text=${text}`);
+
+            // Get all elements of the specified tag
+            const elements = document.querySelectorAll(tagName);
+            console.log(`Found ${elements.length} ${tagName} elements to search`);
+
+            // Look for exact text match first
+            element = Array.from(elements).find(el =>
+                el.textContent.trim() === text ||
+                el.textContent.trim().toLowerCase() === text.toLowerCase()
+            );
+
+            // If no exact match, try partial match
+            if (!element) {
+                element = Array.from(elements).find(el =>
+                    el.textContent.trim().includes(text) ||
+                    el.textContent.trim().toLowerCase().includes(text.toLowerCase())
+                );
+            }
+
+            if (element) {
+                console.log(`Found ${tagName} element with text: ${text}`);
+                return element;
+            }
+        }
+    }
+
+    // Try standard CSS selector
     try {
-        const interactiveElements = [];
+        element = document.querySelector(selector);
+        if (element) {
+            console.log("Found element with standard CSS selector");
+            return element;
+        }
+    } catch (e) {
+        // Ignore error for invalid selectors
+        console.log("Invalid CSS selector, trying other methods");
+    }
 
-        // Get all potentially interactive elements
-        const elements = document.querySelectorAll('button, a, input, textarea, select, [role="button"], [tabindex]');
+    // Try attribute-based selector: [attributeName="value"]
+    if (selector.startsWith('[') && selector.includes('=')) {
+        const match = selector.match(/\[([a-zA-Z-]+)\s*=\s*['"]([^'"]+)['"]\]/);
+        if (match) {
+            const [_, attrName, attrValue] = match;
 
-        // Map each element to its properties
-        Array.from(elements).forEach((element, index) => {
-            // Skip hidden elements
-            if (!isElementVisible(element)) return;
+            if (attrName === 'text') {
+                element = findElementByText(attrValue);
+            } else {
+                try {
+                    const attrSelector = `[${attrName}="${attrValue}"]`;
+                    element = document.querySelector(attrSelector);
+                } catch (e) {
+                    console.warn(`Invalid attribute selector: ${attrSelector}`);
+                }
+            }
 
-            // Extract key properties of the element
-            const properties = {
-                index,
-                tag: element.tagName.toLowerCase(),
-                id: element.id || null,
-                text: element.textContent?.trim() || null,
-                value: element.value || null,
-                placeholder: element.getAttribute('placeholder') || null,
-                ariaLabel: element.getAttribute('aria-label') || null,
-                role: element.getAttribute('role') || null,
-                type: element.getAttribute('type') || null,
-                className: element.className || null,
-                isInViewport: isElementInViewport(element),
-                // Include only minimal position info to reduce size
-                position: element.isInViewport ? {
-                    top: element.getBoundingClientRect().top,
-                    left: element.getBoundingClientRect().left
-                } : null
-            };
+            if (element) {
+                console.log(`Found element by attribute ${attrName}="${attrValue}"`);
+                return element;
+            }
+        }
+    }
 
-            interactiveElements.push(properties);
-        });
+    // Last resort: Try to find element by text content
+    // First, try to extract any text content from the selector
+    const textContent = extractTextContent(selector);
+    if (textContent) {
+        console.log("Trying to find by extracted text content:", textContent);
+        element = findElementByText(textContent) || findElementByPartialText(textContent);
+    }
 
-        // Get overall page context
-        const pageContext = {
+    console.log("Find element result:", element ? "Found" : "Not found");
+    return element;
+}
+
+function extractTextFromXPath(xpathSelector) {
+    // Look for text()='something' or contains(text(), 'something')
+    const match1 = xpathSelector.match(/text\(\)\s*=\s*['"]([^'"]+)['"]/);
+    const match2 = xpathSelector.match(/contains\s*\(\s*text\(\)\s*,\s*['"]([^'"]+)['"]\s*\)/);
+
+    return match1 ? match1[1] : (match2 ? match2[1] : null);
+}
+
+// Helper function to extract text content from various selector formats
+function extractTextContent(selector) {
+    // Try to extract text from various selector formats
+    let textContent = null;
+
+    // Check for text='content' format
+    const textMatch = selector.match(/text\s*=\s*['"]([^'"]+)['"]/);
+    if (textMatch) return textMatch[1];
+
+    // Check for :has-text('content') format
+    const hasTextMatch = selector.match(/:has-text\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+    if (hasTextMatch) return hasTextMatch[1];
+
+    // Check for contains(text(), 'content') format
+    const containsMatch = selector.match(/contains\s*\(\s*text\(\)\s*,\s*['"]([^'"]+)['"]\s*\)/);
+    if (containsMatch) return containsMatch[1];
+
+    // Plain text as a last resort - strip any obvious selector syntax
+    return selector.replace(/^[a-z0-9]+:|[.#\[\]]/g, '').trim();
+}
+
+/**
+ * Enhanced findElementByText with more flexible matching
+ */
+function findElementByText(text) {
+    if (!text) return null;
+
+    // Clean the text
+    const cleanText = text.replace(/[.,;:!?]$/, '').trim();
+
+    // Common interactive elements that might contain text
+    const allTextElements = Array.from(document.querySelectorAll(
+        'button, a, input[type="submit"], [role="button"], div, span, p, label, h1, h2, h3, h4, h5, h6'
+    ));
+
+    return allTextElements.find(el => {
+        const elText = el.textContent?.trim() || '';
+        const cleanElText = elText.replace(/[.,;:!?]$/, '').trim();
+
+        return cleanElText === cleanText ||
+            cleanElText.toLowerCase() === cleanText.toLowerCase();
+    });
+}
+
+function findElementByPartialText(text) {
+    if (!text) return null;
+
+    // Clean the text
+    const cleanText = text.replace(/[.,;:!?]$/, '').trim();
+
+    // Common interactive elements that might contain text
+    const allTextElements = Array.from(document.querySelectorAll(
+        'button, a, input[type="submit"], [role="button"], div, span, p, label, h1, h2, h3, h4, h5, h6'
+    ));
+
+    return allTextElements.find(el => {
+        const elText = el.textContent?.trim() || '';
+        const cleanElText = elText.replace(/[.,;:!?]$/, '').trim();
+
+        return cleanElText.includes(cleanText) ||
+            cleanElText.toLowerCase().includes(cleanText.toLowerCase());
+    });
+}
+
+async function clickElement(element) {
+    if (!element) {
+        return { success: false, error: 'Element is null' };
+    }
+
+    console.log('Clicking element:', element);
+
+    // Ensure the element is in view
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Wait for scrolling to complete
+    return new Promise(resolve => {
+        setTimeout(() => {
+            try {
+                // Try the native click (simpler approach)
+                element.click();
+                resolve({ success: true, action: 'click' });
+            } catch (error) {
+                console.warn('Native click failed, trying event dispatch:', error);
+
+                try {
+                    // Use a single click event to avoid double-clicking
+                    const clickEvent = new MouseEvent('click', {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window
+                    });
+
+                    const success = element.dispatchEvent(clickEvent);
+                    resolve({
+                        success: success,
+                        action: 'click',
+                        method: 'event'
+                    });
+                } catch (eventError) {
+                    resolve({
+                        success: false,
+                        error: eventError.message,
+                        originalError: error.message
+                    });
+                }
+            }
+        }, 300); // Small delay to ensure scrolling is complete
+    });
+}
+
+async function inputText(element, text) {
+    if (!element) {
+        return { success: false, error: 'Element is null' };
+    }
+
+    if (element.tagName.toLowerCase() !== 'input' &&
+        element.tagName.toLowerCase() !== 'textarea') {
+        return { success: false, error: 'Element is not an input field' };
+    }
+
+    // Ensure the element is in view
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Wait for scrolling to complete
+    return new Promise(resolve => {
+        setTimeout(() => {
+            try {
+                element.focus();
+                element.value = text || '';
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                resolve({ success: true, action: 'input' });
+            } catch (error) {
+                resolve({
+                    success: false,
+                    error: error.message
+                });
+            }
+        }, 300);
+    });
+}
+
+async function selectOption(element, value) {
+    if (!element) {
+        return { success: false, error: 'Element is null' };
+    }
+
+    if (element.tagName.toLowerCase() !== 'select') {
+        return { success: false, error: 'Element is not a select dropdown' };
+    }
+
+    // Ensure the element is in view
+    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+    // Wait for scrolling to complete
+    return new Promise(resolve => {
+        setTimeout(() => {
+            try {
+                const option = Array.from(element.options)
+                    .find(opt => opt.textContent === value || opt.value === value);
+
+                if (option) {
+                    element.value = option.value;
+                    element.dispatchEvent(new Event('change', { bubbles: true }));
+                    resolve({ success: true, action: 'select' });
+                } else {
+                    resolve({ success: false, error: 'Option not found' });
+                }
+            } catch (error) {
+                resolve({
+                    success: false,
+                    error: error.message
+                });
+            }
+        }, 300);
+    });
+}
+
+function extractInteractiveElements() {
+    // First, ensure IDs are assigned to elements
+    assignIdsToInteractiveElements();
+
+    const elements = [];
+    const interactiveSelectors = [
+        'button',
+        'a',
+        'input:not([type="hidden"])',
+        'select',
+        'textarea',
+        '[role="button"]',
+        '[role="link"]',
+        '[role="tab"]',
+        '[role="menuitem"]',
+        // Add more as needed
+    ];
+
+    // Find all interactive elements
+    const allElements = document.querySelectorAll(interactiveSelectors.join(', '));
+
+    // Process each element
+    allElements.forEach(element => {
+        // Skip hidden or non-visible elements
+        if (!isElementVisible(element)) {
+            return;
+        }
+
+        // Extract useful information from the element
+        const elementInfo = {
+            tag: element.tagName.toLowerCase(),
+            text: element.textContent?.trim() || '',
+            id: element.id || '',
+            className: element.className || '',
+            type: element.type || '',
+            name: element.name || '',
+            value: element.tagName.toLowerCase() === 'input' ? element.value : '',
+            placeholder: element.placeholder || '',
+            ariaLabel: element.getAttribute('aria-label') || '',
+            role: element.getAttribute('role') || '',
+            isInteractive: true,
+            isInViewport: isElementInViewport(element),
+            boundingRect: element.getBoundingClientRect()
+        };
+
+        // Add to elements array
+        elements.push(elementInfo);
+    });
+
+    // Return both elements and page context
+    return {
+        pageContext: {
             title: document.title,
             url: window.location.href
-        };
+        },
+        elements: elements
+    };
+}
 
-        console.log(`Found ${interactiveElements.length} interactive elements`);
+function isElementVisible(element) {
+    if (!element) return false;
 
-        return {
-            elements: interactiveElements,
-            pageContext
-        };
-    } catch (error) {
-        console.error("Error extracting elements:", error);
-        // Return an empty result rather than failing
-        return { elements: [], pageContext: { title: document.title, url: location.href } };
-    }
+    const style = window.getComputedStyle(element);
+
+    // Check various properties that would make an element non-interactive
+    return !(
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        style.opacity === '0' ||
+        style.pointerEvents === 'none' ||
+        element.hasAttribute('hidden') ||
+        element.hasAttribute('aria-hidden') && element.getAttribute('aria-hidden') === 'true' ||
+        element.offsetParent === null // This checks if element is not rendered
+    );
 }
 
 function isElementInViewport(el) {
@@ -327,230 +841,8 @@ function isElementInViewport(el) {
         rect.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
         rect.right <= (window.innerWidth || document.documentElement.clientWidth) &&
         rect.width > 0 &&
-        rect.height > 0 &&
-        window.getComputedStyle(el).visibility !== 'hidden' &&
-        window.getComputedStyle(el).display !== 'none'
+        rect.height > 0
     );
 }
 
-// Helper functions
-function isElementVisible(element) {
-    const style = window.getComputedStyle(element);
-    return style.display !== 'none' &&
-        style.visibility !== 'hidden' &&
-        style.opacity !== '0';
-}
-
-function getElementRect(element) {
-    const rect = element.getBoundingClientRect();
-    return {
-        top: rect.top,
-        left: rect.left,
-        width: rect.width,
-        height: rect.height
-    };
-}
-
-function isInViewport(element) {
-    const rect = element.getBoundingClientRect();
-    return (
-        rect.top >= 0 &&
-        rect.left >= 0 &&
-        rect.bottom <= window.innerHeight &&
-        rect.right <= window.innerWidth
-    );
-}
-
-function generateElementPath(element) {
-    // Create a path like: body > div.container > form#login > button.submit
-    let path = [];
-    let current = element;
-
-    while (current && current !== document.body) {
-        let identifier = current.tagName.toLowerCase();
-        if (current.id) {
-            identifier += `#${current.id}`;
-        } else if (current.className) {
-            const classes = Array.from(current.classList).join('.');
-            if (classes) {
-                identifier += `.${classes}`;
-            }
-        }
-        path.unshift(identifier);
-        current = current.parentElement;
-    }
-
-    return path.join(' > ');
-}
-
-function getVisiblePageText() {
-    // Get visible text content from the page, prioritizing headers and labels
-    const textElements = document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, label, button');
-    return Array.from(textElements)
-        .filter(el => isElementVisible(el))
-        .map(el => el.textContent.trim())
-        .filter(text => text.length > 0)
-        .join('\n');
-}
-
-function interactWithElement(selector, action = 'click', value = null) {
-    console.log(`Attempting to ${action} element: ${selector}`);
-
-    let element;
-
-    try {
-        // Check if it's an attribute selector with specific text format like [text='value']
-        if (selector.startsWith('[') && selector.includes('=')) {
-            // Extract the attribute and value
-            const match = selector.match(/\[([a-zA-Z]+)=['"]([^'"]+)['"]\]/);
-            if (match) {
-                const [_, attribute, targetValue] = match;
-                console.log(`Looking for element with ${attribute}="${targetValue}"`);
-
-                // Find all elements with matching text content
-                if (attribute === 'text') {
-                    const allElements = Array.from(document.querySelectorAll('button, a, input[type="submit"], [role="button"], div, span, p'));
-                    element = allElements.find(el => {
-                        const text = el.textContent?.trim() || '';
-                        return text === targetValue;
-                    });
-                    console.log(`Text search result:`, element);
-                } else {
-                    // For other attributes, use regular attribute selector
-                    element = document.querySelector(`[${attribute}="${targetValue}"]`);
-                }
-            }
-        }
-
-        // If not found with attribute format, try as a CSS selector
-        if (!element) {
-            try {
-                element = document.querySelector(selector);
-            } catch (error) {
-                console.log("Not a valid CSS selector:", error);
-            }
-        }
-
-        // If still not found, try as an element path
-        if (!element) {
-            const allElements = document.querySelectorAll('*');
-            for (const el of allElements) {
-                if (generateElementPath(el) === selector) {
-                    element = el;
-                    break;
-                }
-            }
-        }
-
-        // If still not found, try looking for exact text content match
-        if (!element) {
-            // Remove quotes and brackets if present
-            const cleanSelector = selector.replace(/^\[text=['"]|['"]]\s*$/g, '');
-            console.log("Trying text search with:", cleanSelector);
-
-            const allTextElements = Array.from(document.querySelectorAll('button, a, input[type="submit"], [role="button"], div, span, p'));
-            element = allTextElements.find(el => {
-                const text = el.textContent?.trim() || '';
-                return text === cleanSelector ||
-                    text.toLowerCase() === cleanSelector.toLowerCase();
-            });
-        }
-
-        // Try with partial text match as a last resort
-        if (!element) {
-            const cleanSelector = selector.replace(/^\[text=['"]|['"]]\s*$/g, '');
-            console.log("Trying partial text match with:", cleanSelector);
-
-            const allTextElements = Array.from(document.querySelectorAll('button, a, input[type="submit"], [role="button"], div, span, p'));
-            element = allTextElements.find(el => {
-                const text = el.textContent?.trim() || '';
-                return text.includes(cleanSelector) ||
-                    text.toLowerCase().includes(cleanSelector.toLowerCase());
-            });
-        }
-
-        if (!element) {
-            console.error("Element not found using any method for selector:", selector);
-            return { success: false, error: "Element not found" };
-        }
-
-        // Log what we found for debugging
-        console.log("Found element:", {
-            tag: element.tagName,
-            id: element.id,
-            class: element.className,
-            text: element.textContent?.trim()
-        });
-
-        // Ensure the element is in view
-        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-        // Small delay to ensure the element is fully visible
-        return new Promise(resolve => {
-            setTimeout(() => {
-                // Perform the requested action
-                switch (action) {
-                    case 'click':
-                        // Try multiple click strategies
-                        try {
-                            // Native click
-                            element.click();
-
-                            // Dispatch mouse events for better compatibility
-                            ['mousedown', 'mouseup', 'click'].forEach(eventType => {
-                                element.dispatchEvent(new MouseEvent(eventType, {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    view: window
-                                }));
-                            });
-
-                            console.log("Click executed successfully");
-                            resolve({ success: true, action: 'click' });
-                        } catch (clickError) {
-                            console.error("Error during click:", clickError);
-                            resolve({ success: false, error: `Click error: ${clickError.message}` });
-                        }
-                        break;
-
-                    case 'input':
-                        if (element.tagName.toLowerCase() === 'input' ||
-                            element.tagName.toLowerCase() === 'textarea') {
-                            element.focus();
-                            element.value = value || '';
-                            element.dispatchEvent(new Event('input', { bubbles: true }));
-                            element.dispatchEvent(new Event('change', { bubbles: true }));
-                            resolve({ success: true, action: 'input' });
-                        } else {
-                            resolve({ success: false, error: "Element is not an input field" });
-                        }
-                        break;
-
-                    case 'select':
-                        if (element.tagName.toLowerCase() === 'select') {
-                            const option = Array.from(element.options)
-                                .find(opt => opt.textContent === value || opt.value === value);
-
-                            if (option) {
-                                element.value = option.value;
-                                element.dispatchEvent(new Event('change', { bubbles: true }));
-                                resolve({ success: true, action: 'select' });
-                            } else {
-                                resolve({ success: false, error: "Option not found" });
-                            }
-                        } else {
-                            resolve({ success: false, error: "Element is not a select dropdown" });
-                        }
-                        break;
-
-                    default:
-                        resolve({ success: false, error: "Unsupported action" });
-                }
-            }, 300); // Small delay to ensure scrolling is complete
-        });
-    } catch (error) {
-        console.error("Error in interactWithElement:", error);
-        return { success: false, error: error.message };
-    }
-}
-
+console.log('Content script loaded');
